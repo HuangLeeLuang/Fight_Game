@@ -133,7 +133,7 @@ export class FightScene extends Phaser.Scene {
   private lastPlayerX = 315;
   private lastAiX = 645;
   private isTouchUiVisible = false;
-  private showDebugBoxes = true;
+  private showDebugBoxes = false;
   private useIdleAi = false;
   private demoPose?: DemoPose;
   private unavailableSfx = new Set<SfxKey>();
