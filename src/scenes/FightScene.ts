@@ -4,12 +4,12 @@ import { BattleEngine } from '../game/combat';
 import { ATTACKS, FIGHTER, GAME_HEIGHT, GAME_WIDTH, PARRY, ROUND_FLOW, ROUND_TIME_MS, STAGE, THROW } from '../game/constants';
 import { activeActionBox, fighterHurtbox, overlapPoint, throwHitbox, type CombatBox } from '../game/hitboxes';
 import { ComboInputBuffer } from '../game/inputBuffer';
-import type { BattleSnapshot, CombatEvent, Facing, FighterIntent, FighterModel } from '../game/types';
+import type { BattleSnapshot, CombatEvent, Facing, FighterId, FighterIntent, FighterModel } from '../game/types';
 
 type RoundMode = 'select' | 'tutorial' | 'fight' | 'over';
 type CharacterId = 'male' | 'female';
 type TouchButtonId = 'left' | 'right' | 'light' | 'heavy' | 'block' | 'special' | 'throw';
-type DemoPose = 'heavyActive' | 'throwVictim' | 'blocking' | 'parry';
+type DemoPose = 'heavyActive' | 'throwVictim' | 'blocking' | 'blockstun' | 'parry' | 'parryFlash';
 type SfxKey = 'hit' | 'block' | 'counter' | 'throw' | 'parry';
 
 interface TouchButton {
@@ -90,8 +90,9 @@ const FEMALE_FRAMES = {
   getUp: 27,
 } as const;
 
-const DEMO_POSES = new Set<DemoPose>(['heavyActive', 'throwVictim', 'blocking', 'parry']);
+const DEMO_POSES = new Set<DemoPose>(['heavyActive', 'throwVictim', 'blocking', 'blockstun', 'parry', 'parryFlash']);
 const SFX_KEYS = new Set<string>(['hit', 'block', 'counter', 'throw', 'parry']);
+const SUCCESS_FLASH_MS = 260;
 
 const MALE_FRAMES = {
   throwVictimCaught: 16,
@@ -114,6 +115,8 @@ export class FightScene extends Phaser.Scene {
   private tutorialAiTimer = 0;
   private roundOverTimer = 0;
   private eventTextTimer = 0;
+  private playerParryFlashTimer = 0;
+  private aiParryFlashTimer = 0;
   private sceneTimeMs = 0;
   private sparkTimer = 0;
   private lastPlayerX = 315;
@@ -485,6 +488,7 @@ export class FightScene extends Phaser.Scene {
     this.engine.reset();
     this.ai.reset();
     this.inputBuffer.reset();
+    this.resetSuccessFlashTimers();
     this.assignCharacterTextures();
     this.setRoundOverActionsVisible(false);
     this.mode = 'tutorial';
@@ -503,6 +507,7 @@ export class FightScene extends Phaser.Scene {
     this.engine.reset();
     this.ai.reset();
     this.inputBuffer.reset();
+    this.resetSuccessFlashTimers();
     this.assignCharacterTextures();
     this.setRoundOverActionsVisible(false);
     this.mode = 'fight';
@@ -517,6 +522,7 @@ export class FightScene extends Phaser.Scene {
 
   private showCharacterSelect(): void {
     this.mode = 'select';
+    this.resetSuccessFlashTimers();
     this.selectionOverlay.setVisible(true);
     this.setRoundOverActionsVisible(false);
     this.modeText.setVisible(true);
@@ -597,9 +603,22 @@ export class FightScene extends Phaser.Scene {
       return;
     }
 
+    if (this.demoPose === 'blockstun') {
+      player.state = { kind: 'blockstun', remainingMs: ATTACKS.light.blockstunMs };
+      ai.state = { kind: 'idle', remainingMs: 0 };
+      return;
+    }
+
     if (this.demoPose === 'parry') {
       player.state = { kind: 'parry', remainingMs: PARRY.activeMs * 0.55 };
       ai.state = { kind: 'idle', remainingMs: 0 };
+      return;
+    }
+
+    if (this.demoPose === 'parryFlash') {
+      player.state = { kind: 'idle', remainingMs: 0 };
+      ai.state = { kind: 'idle', remainingMs: 0 };
+      this.playerParryFlashTimer = SUCCESS_FLASH_MS;
       return;
     }
 
@@ -759,8 +778,8 @@ export class FightScene extends Phaser.Scene {
     this.aiShadow.setPosition(snapshot.ai.x, STAGE.floorY + 4);
     this.playerShadow.setScale(1 + Math.abs(playerPose.offsetY) * 0.01, 1);
     this.aiShadow.setScale(1 + Math.abs(aiPose.offsetY) * 0.01, 1);
-    this.tintFighter(this.playerSprite, snapshot.player.state.kind);
-    this.tintFighter(this.aiSprite, snapshot.ai.state.kind);
+    this.tintFighter(this.playerSprite, snapshot.player);
+    this.tintFighter(this.aiSprite, snapshot.ai);
     this.renderHitboxes(snapshot);
     this.renderThrowRangeHint(snapshot);
     this.renderSpark();
@@ -774,6 +793,7 @@ export class FightScene extends Phaser.Scene {
     } else {
       this.eventText.setText('');
     }
+    this.updateSuccessFlashTimers();
 
     this.updateTouchControlVisibility();
     this.updateTouchControlOpacity(snapshot);
@@ -795,6 +815,10 @@ export class FightScene extends Phaser.Scene {
       this.showImpactSpark(event);
     }
 
+    if (event.type === 'parry' && event.source) {
+      this.setParryFlash(event.source);
+    }
+
     const key = event.type === 'counter' ? 'counter' : event.type;
     if (isSfxKey(key)) {
       this.playSfx(key, event.type === 'counter' ? 0.8 : 0.55);
@@ -812,14 +836,35 @@ export class FightScene extends Phaser.Scene {
     }
   }
 
-  private tintFighter(sprite: Phaser.GameObjects.Sprite, state: string): void {
-    if (state === 'blocking' || state === 'blockstun') {
-      sprite.setTint(0x93c5fd);
-    } else if (state === 'parry' || state === 'parrySuccess') {
+  private setParryFlash(fighterId: FighterId): void {
+    if (fighterId === 'player') {
+      this.playerParryFlashTimer = SUCCESS_FLASH_MS;
+    } else {
+      this.aiParryFlashTimer = SUCCESS_FLASH_MS;
+    }
+  }
+
+  private updateSuccessFlashTimers(): void {
+    const dt = this.game.loop.delta;
+    this.playerParryFlashTimer = Math.max(0, this.playerParryFlashTimer - dt);
+    this.aiParryFlashTimer = Math.max(0, this.aiParryFlashTimer - dt);
+  }
+
+  private resetSuccessFlashTimers(): void {
+    this.playerParryFlashTimer = 0;
+    this.aiParryFlashTimer = 0;
+  }
+
+  private tintFighter(sprite: Phaser.GameObjects.Sprite, fighter: FighterModel): void {
+    const parryFlashTimer = fighter.id === 'player' ? this.playerParryFlashTimer : this.aiParryFlashTimer;
+
+    if (parryFlashTimer > 0) {
       sprite.setTint(0xfacc15);
-    } else if (state === 'hitstun' || state === 'throwVictim' || state === 'ko') {
+    } else if (fighter.state.kind === 'blockstun') {
+      sprite.setTint(0x93c5fd);
+    } else if (fighter.state.kind === 'hitstun' || fighter.state.kind === 'throwVictim' || fighter.state.kind === 'ko') {
       sprite.setTint(0xfca5a5);
-    } else if (state.startsWith('throw')) {
+    } else if (fighter.state.kind.startsWith('throw')) {
       sprite.setTint(0xfdba74);
     } else {
       sprite.clearTint();
