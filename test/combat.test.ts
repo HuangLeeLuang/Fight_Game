@@ -88,6 +88,72 @@ describe('BattleEngine', () => {
     expect(block?.hitLevel).toBe('high');
   });
 
+  it('auto-blocks incoming AI attacks when the player is neutral', () => {
+    const engine = new BattleEngine();
+    engine.player.x = 450;
+    engine.ai.x = 500;
+    engine.ai.state = {
+      kind: 'attackActive',
+      remainingMs: 60,
+      attack: 'light',
+      hasConnected: false,
+    };
+
+    const snapshot = engine.update(
+      16,
+      { left: false, right: false, block: false },
+      { left: false, right: false, block: false },
+    );
+
+    expect(snapshot.player.health).toBe(100);
+    expect(snapshot.player.state.kind).toBe('blockstun');
+    expect(snapshot.events.some((event) => event.type === 'block' && event.source === 'player')).toBe(true);
+  });
+
+  it('auto-blocks incoming AI attacks when the player retreats', () => {
+    const engine = new BattleEngine();
+    engine.player.x = 450;
+    engine.ai.x = 500;
+    engine.ai.state = {
+      kind: 'attackActive',
+      remainingMs: 60,
+      attack: 'light',
+      hasConnected: false,
+    };
+
+    const snapshot = engine.update(
+      16,
+      { left: true, right: false, block: false },
+      { left: false, right: false, block: false },
+    );
+
+    expect(snapshot.player.health).toBe(100);
+    expect(snapshot.player.state.kind).toBe('blockstun');
+    expect(snapshot.events.some((event) => event.type === 'block' && event.source === 'player')).toBe(true);
+  });
+
+  it('does not auto-block incoming AI attacks while the player advances', () => {
+    const engine = new BattleEngine();
+    engine.player.x = 450;
+    engine.ai.x = 500;
+    engine.ai.state = {
+      kind: 'attackActive',
+      remainingMs: 60,
+      attack: 'light',
+      hasConnected: false,
+    };
+
+    const snapshot = engine.update(
+      16,
+      { left: false, right: true, block: false },
+      { left: false, right: false, block: false },
+    );
+
+    expect(snapshot.player.health).toBe(94);
+    expect(snapshot.player.state.kind).toBe('hitstun');
+    expect(snapshot.events.some((event) => event.type === 'block' && event.source === 'player')).toBe(false);
+  });
+
   it('parries an incoming attack and stuns the attacker', () => {
     const engine = new BattleEngine();
     engine.player.x = 450;

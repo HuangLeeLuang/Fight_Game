@@ -83,8 +83,8 @@ export class BattleEngine {
     this.moveFighter(this.ai, aiIntent, dtMs);
 
     this.faceEachOther();
-    this.resolveActiveActions(this.player, this.ai);
-    this.resolveActiveActions(this.ai, this.player);
+    this.resolveActiveActions(this.player, this.ai, aiIntent);
+    this.resolveActiveActions(this.ai, this.player, playerIntent);
     this.clampSpacing();
 
     return this.snapshot();
@@ -224,11 +224,11 @@ export class BattleEngine {
     fighter.x = Math.max(STAGE.left, Math.min(STAGE.right, fighter.x));
   }
 
-  private resolveActiveActions(attacker: FighterModel, defender: FighterModel): void {
+  private resolveActiveActions(attacker: FighterModel, defender: FighterModel, defenderIntent: FighterIntent): void {
     if (this.roundOver) return;
 
     if (attacker.state.kind === 'attackActive' && !attacker.state.hasConnected) {
-      this.resolveAttack(attacker, defender);
+      this.resolveAttack(attacker, defender, defenderIntent);
     }
 
     if (attacker.state.kind === 'throwActive' && !attacker.state.hasConnected) {
@@ -236,7 +236,7 @@ export class BattleEngine {
     }
   }
 
-  private resolveAttack(attacker: FighterModel, defender: FighterModel): void {
+  private resolveAttack(attacker: FighterModel, defender: FighterModel, defenderIntent: FighterIntent): void {
     const attack = attacker.state.attack ?? 'light';
     const data = ATTACKS[attack];
     const impact = overlapPoint(attackHitbox(attacker, attack), fighterHurtbox(defender));
@@ -260,7 +260,7 @@ export class BattleEngine {
       return;
     }
 
-    if (defender.state.kind === 'blocking' && defender.facing === -attacker.facing) {
+    if (canGuardAttack(defender, defenderIntent, attacker)) {
       defender.state = state('blockstun', data.blockstunMs);
       attacker.x -= attacker.facing * FIGHTER.blockPush;
       this.events.push({
@@ -415,6 +415,20 @@ function isControllable(fighter: FighterModel): boolean {
 
 function canMove(fighter: FighterModel): boolean {
   return fighter.state.kind === 'idle' || fighter.state.kind === 'blocking';
+}
+
+function canGuardAttack(defender: FighterModel, intent: FighterIntent, attacker: FighterModel): boolean {
+  if (defender.facing !== -attacker.facing) return false;
+  if (defender.state.kind === 'blocking') return true;
+  return defender.id === 'player' && defender.state.kind === 'idle' && isNeutralOrRetreating(defender, intent);
+}
+
+function isNeutralOrRetreating(fighter: FighterModel, intent: FighterIntent): boolean {
+  if (intent.command || intent.block) return false;
+
+  const direction = Number(intent.right) - Number(intent.left);
+  if (direction === 0) return !intent.left && !intent.right;
+  return direction === -fighter.facing;
 }
 
 function isCounterable(fighter: FighterModel): boolean {
