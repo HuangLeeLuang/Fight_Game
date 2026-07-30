@@ -46,6 +46,17 @@ interface FighterPose {
   rotation: number;
 }
 
+interface WorldViewport {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+  height: number;
+  centerX: number;
+  centerY: number;
+}
+
 const TUTORIAL_STEPS = [
   '教學 1/4：靠近對手並用輕攻擊或重攻擊命中。',
   '教學 2/4：按住防禦擋住攻擊，或按特殊鍵招架。',
@@ -126,6 +137,8 @@ export class FightScene extends Phaser.Scene {
   private useIdleAi = false;
   private demoPose?: DemoPose;
   private unavailableSfx = new Set<SfxKey>();
+  private arenaBackdrop!: Phaser.GameObjects.Rectangle;
+  private arenaWidthRects: Phaser.GameObjects.Rectangle[] = [];
 
   private keys!: KeyMap;
   private playerSprite!: Phaser.GameObjects.Sprite;
@@ -144,7 +157,9 @@ export class FightScene extends Phaser.Scene {
   private debugToggleText!: Phaser.GameObjects.Text;
   private roundActionContainer!: Phaser.GameObjects.Container;
   private orientationOverlay!: Phaser.GameObjects.Container;
+  private orientationBackdrop!: Phaser.GameObjects.Rectangle;
   private selectionOverlay!: Phaser.GameObjects.Container;
+  private selectionBackdrop!: Phaser.GameObjects.Rectangle;
   private attackArc!: Phaser.GameObjects.Rectangle;
   private throwRangeHint!: Phaser.GameObjects.Rectangle;
   private playerHurtboxViz!: Phaser.GameObjects.Rectangle;
@@ -177,6 +192,7 @@ export class FightScene extends Phaser.Scene {
     this.createSelectionOverlay();
     this.createTouchControls();
     this.createOrientationOverlay();
+    this.installResponsiveLayout();
     this.createKeys();
     this.setupCanvasFocus();
     this.showCharacterSelect();
@@ -287,11 +303,14 @@ export class FightScene extends Phaser.Scene {
   }
 
   private createArena(): void {
-    this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x0d1017);
-    this.add.rectangle(GAME_WIDTH / 2, 262, GAME_WIDTH, 300, 0x151b25);
-    this.add.rectangle(GAME_WIDTH / 2, 146, GAME_WIDTH, 90, 0x202a38).setAlpha(0.65);
-    this.add.rectangle(GAME_WIDTH / 2, STAGE.floorY + 42, GAME_WIDTH, 120, 0x2f3542);
-    this.add.rectangle(GAME_WIDTH / 2, STAGE.floorY - 8, GAME_WIDTH - 120, 10, 0xcbd5e1);
+    const worldFillWidth = GAME_WIDTH * 3;
+    this.arenaBackdrop = this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, worldFillWidth, GAME_HEIGHT * 3, 0x0d1017);
+    this.arenaWidthRects = [
+      this.add.rectangle(GAME_WIDTH / 2, 262, worldFillWidth, 300, 0x151b25),
+      this.add.rectangle(GAME_WIDTH / 2, 146, worldFillWidth, 90, 0x202a38).setAlpha(0.65),
+      this.add.rectangle(GAME_WIDTH / 2, STAGE.floorY + 42, worldFillWidth, 120, 0x2f3542),
+      this.add.rectangle(GAME_WIDTH / 2, STAGE.floorY - 8, worldFillWidth, 10, 0xcbd5e1),
+    ];
 
     for (let i = 0; i < 12; i += 1) {
       this.add.rectangle(90 + i * 72, 205 + (i % 2) * 18, 44, 130, 0x263244).setAlpha(0.62);
@@ -401,6 +420,7 @@ export class FightScene extends Phaser.Scene {
 
   private createSelectionOverlay(): void {
     const bg = this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x0d1017, 0.92);
+    this.selectionBackdrop = bg;
     const title = this.add
       .text(GAME_WIDTH / 2, 74, '選擇你的角色', textStyle(34, '#f8fafc'))
       .setOrigin(0.5);
@@ -472,15 +492,119 @@ export class FightScene extends Phaser.Scene {
       rect.on('pointercancel', () => this.releaseTouchButton(button));
     }
 
+    this.layoutTouchControls();
     this.setTouchControlsVisible(this.sys.game.device.input.touch);
   }
 
   private createOrientationOverlay(): void {
     const bg = this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x05070c, 0.9);
+    this.orientationBackdrop = bg;
     const text = this.add
       .text(GAME_WIDTH / 2, GAME_HEIGHT / 2, '請旋轉成橫向遊玩', textStyle(30, '#ffffff'))
       .setOrigin(0.5);
     this.orientationOverlay = this.add.container(0, 0, [bg, text]).setDepth(50).setVisible(false);
+  }
+
+  private installResponsiveLayout(): void {
+    this.applyResponsiveLayout();
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.applyResponsiveLayout, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.applyResponsiveLayout, this);
+    });
+  }
+
+  private applyResponsiveLayout(): void {
+    const width = Math.max(1, this.scale.width || GAME_WIDTH);
+    const height = Math.max(1, this.scale.height || GAME_HEIGHT);
+    const zoom = Math.max(0.1, Math.min(width / GAME_WIDTH, height / GAME_HEIGHT));
+    const visibleWidth = width / zoom;
+    const visibleHeight = height / zoom;
+    const left = (GAME_WIDTH - visibleWidth) / 2;
+    const top = (GAME_HEIGHT - visibleHeight) / 2;
+    const bounds: WorldViewport = {
+      left,
+      right: left + visibleWidth,
+      top,
+      bottom: top + visibleHeight,
+      width: visibleWidth,
+      height: visibleHeight,
+      centerX: left + visibleWidth / 2,
+      centerY: top + visibleHeight / 2,
+    };
+
+    this.cameras.main
+      .setViewport(0, 0, width, height)
+      .setZoom(zoom)
+      .setScroll(bounds.left, bounds.top)
+      .setBackgroundColor(0x0d1017);
+
+    this.resizeFullscreenRect(this.arenaBackdrop, bounds, 0);
+    for (const rect of this.arenaWidthRects) {
+      this.resizeWorldWidthRect(rect, bounds, 8);
+    }
+    this.resizeFullscreenRect(this.selectionBackdrop, bounds, 0);
+    this.resizeFullscreenRect(this.orientationBackdrop, bounds, 0);
+    this.layoutTouchControls(bounds);
+    this.updateOrientationOverlay();
+  }
+
+  private resizeFullscreenRect(rect: Phaser.GameObjects.Rectangle | undefined, bounds: WorldViewport, padding: number): void {
+    this.resizeRect(rect, bounds.centerX, bounds.centerY, bounds.width + padding * 2, bounds.height + padding * 2);
+  }
+
+  private resizeWorldWidthRect(rect: Phaser.GameObjects.Rectangle, bounds: WorldViewport, padding: number): void {
+    this.resizeRect(rect, bounds.centerX, rect.y, bounds.width + padding * 2, rect.height);
+  }
+
+  private resizeRect(
+    rect: Phaser.GameObjects.Rectangle | undefined,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): void {
+    rect?.setPosition(x, y).setSize(width, height).setDisplaySize(width, height);
+  }
+
+  private layoutTouchControls(bounds = this.visibleWorldBounds()): void {
+    if (this.touchButtons.size === 0) return;
+
+    const moveY = Math.min(422, bounds.bottom - 118);
+    const actionTopY = Math.min(416, bounds.bottom - 124);
+    const actionBottomY = Math.min(490, bounds.bottom - 50);
+    const actionLeftX = bounds.right - 256;
+    const actionRightX = bounds.right - 156;
+
+    this.placeTouchButton('left', bounds.left + 70, moveY);
+    this.placeTouchButton('right', bounds.left + 166, moveY);
+    this.placeTouchButton('light', actionLeftX, actionTopY);
+    this.placeTouchButton('heavy', actionRightX, actionTopY);
+    this.placeTouchButton('block', actionLeftX, actionBottomY);
+    this.placeTouchButton('special', actionRightX, actionBottomY);
+    this.placeTouchButton('throw', bounds.right - 68, (actionTopY + actionBottomY) / 2);
+  }
+
+  private placeTouchButton(id: TouchButtonId, x: number, y: number): void {
+    const button = this.touchButtons.get(id);
+    if (!button) return;
+    button.rect.setPosition(x, y);
+    button.label.setPosition(x, y);
+  }
+
+  private visibleWorldBounds(): WorldViewport {
+    const camera = this.cameras.main;
+    const width = camera.width / camera.zoom;
+    const height = camera.height / camera.zoom;
+    return {
+      left: camera.scrollX,
+      right: camera.scrollX + width,
+      top: camera.scrollY,
+      bottom: camera.scrollY + height,
+      width,
+      height,
+      centerX: camera.scrollX + width / 2,
+      centerY: camera.scrollY + height / 2,
+    };
   }
 
   private startTutorial(): void {
@@ -889,7 +1013,14 @@ export class FightScene extends Phaser.Scene {
   }
 
   private updateTouchControlVisibility(): void {
-    const shouldShow = this.sys.game.device.input.touch || window.innerWidth < 920;
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const shouldShow =
+      this.sys.game.device.input.touch ||
+      this.scale.width < 920 ||
+      this.scale.height < 520 ||
+      viewportWidth < 920 ||
+      viewportHeight < 520;
     if (shouldShow !== this.isTouchUiVisible) {
       this.setTouchControlsVisible(shouldShow);
     }
@@ -953,7 +1084,9 @@ export class FightScene extends Phaser.Scene {
   }
 
   private updateOrientationOverlay(): void {
-    const shouldShow = this.isTouchUiVisible && window.innerHeight > window.innerWidth;
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const shouldShow = this.isTouchUiVisible && viewportHeight > viewportWidth;
     this.orientationOverlay.setVisible(shouldShow);
   }
 

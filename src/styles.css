@@ -23,8 +23,30 @@ body,
   overflow: hidden;
 }
 
+html {
+  min-height: -webkit-fill-available;
+}
+
 body {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: var(--app-height, 100vh);
+  height: var(--app-height, 100dvh);
+  min-height: -webkit-fill-available;
   touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  width: var(--app-width, 100vw);
+  height: var(--app-height, 100vh);
+  height: var(--app-height, 100dvh);
+  background: #0d1017;
 }
 
 canvas {
