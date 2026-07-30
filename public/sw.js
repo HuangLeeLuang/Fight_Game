@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fight-game-offline-v3';
+const CACHE_NAME = 'fight-game-offline-v4';
 const CORE_ASSETS = [
   './',
   './index.html',
