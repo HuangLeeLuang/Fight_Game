@@ -9,7 +9,7 @@ import type { BattleSnapshot, CombatEvent, Facing, FighterIntent, FighterModel }
 type RoundMode = 'select' | 'tutorial' | 'fight' | 'over';
 type CharacterId = 'male' | 'female';
 type TouchButtonId = 'left' | 'right' | 'light' | 'heavy' | 'block' | 'special' | 'throw';
-type DemoPose = 'heavyActive' | 'throwVictim';
+type DemoPose = 'heavyActive' | 'throwVictim' | 'blocking' | 'parry';
 
 interface TouchButton {
   id: TouchButtonId;
@@ -88,6 +88,8 @@ const FEMALE_FRAMES = {
   throwVictimRecover: 39,
   getUp: 27,
 } as const;
+
+const DEMO_POSES = new Set<DemoPose>(['heavyActive', 'throwVictim', 'blocking', 'parry']);
 
 const MALE_FRAMES = {
   throwVictimCaught: 16,
@@ -561,7 +563,7 @@ export class FightScene extends Phaser.Scene {
     }
 
     const pose = params.get('pose');
-    if (pose === 'heavyActive' || pose === 'throwVictim') this.demoPose = pose;
+    if (DEMO_POSES.has(pose as DemoPose)) this.demoPose = pose as DemoPose;
 
     const roundOver = params.get('roundOver');
     if (this.mode === 'fight' && (roundOver === 'player' || roundOver === 'ai' || roundOver === 'draw')) {
@@ -582,6 +584,18 @@ export class FightScene extends Phaser.Scene {
 
     if (this.demoPose === 'heavyActive') {
       player.state = { kind: 'attackActive', remainingMs: ATTACKS.heavy.activeMs, attack: 'heavy', hasConnected: false };
+      ai.state = { kind: 'idle', remainingMs: 0 };
+      return;
+    }
+
+    if (this.demoPose === 'blocking') {
+      player.state = { kind: 'blocking', remainingMs: Number.POSITIVE_INFINITY };
+      ai.state = { kind: 'idle', remainingMs: 0 };
+      return;
+    }
+
+    if (this.demoPose === 'parry') {
+      player.state = { kind: 'parry', remainingMs: PARRY.activeMs * 0.55 };
       ai.state = { kind: 'idle', remainingMs: 0 };
       return;
     }
@@ -1035,9 +1049,10 @@ export class FightScene extends Phaser.Scene {
   private applyFighterPose(sprite: Phaser.GameObjects.Sprite, fighter: FighterModel, pose: FighterPose): void {
     const baseScale = BASE_FRAME_DISPLAY_HEIGHT / sprite.height;
     const floorLift = sprite.texture.key === characterSheetKey('female') ? FEMALE_FLOOR_LIFT : 0;
+    const visualScale = femaleVisualScaleCorrection(sprite, fighter);
     sprite
       .setPosition(fighter.x + pose.offsetX, STAGE.floorY + pose.offsetY + floorLift)
-      .setScale(baseScale * pose.scaleX, baseScale * pose.scaleY)
+      .setScale(baseScale * pose.scaleX * visualScale, baseScale * pose.scaleY * visualScale)
       .setFlipX(fighter.facing < 0)
       .setRotation(pose.rotation);
   }
@@ -1199,6 +1214,24 @@ function characterSheetKey(character: CharacterId): string {
   return CHARACTER_SHEETS[character].key;
 }
 
+function femaleVisualScaleCorrection(sprite: Phaser.GameObjects.Sprite, fighter: FighterModel): number {
+  if (sprite.texture.key !== characterSheetKey('female')) return 1;
+
+  const frameIndex = Number(sprite.frame.name);
+  if (frameIndex !== 11) return 1;
+
+  switch (fighter.state.kind) {
+    case 'parry':
+      return 1.15;
+    case 'parryRecovery':
+      return 1.1;
+    case 'parrySuccess':
+      return 1.06;
+    default:
+      return 1;
+  }
+}
+
 function hitboxColor(level?: string): number {
   if (level === 'high') return 0xfacc15;
   if (level === 'mid') return 0xfb923c;
@@ -1288,7 +1321,7 @@ function femaleFrameForFighter(fighter: FighterModel, moving: boolean, sceneTime
       return 9;
     case 'blocking':
     case 'blockstun':
-      return fighter.state.remainingMs > 70 ? 10 : FEMALE_FRAMES.guardSettle;
+      return FEMALE_FRAMES.guardSettle;
     case 'parry':
     case 'parryRecovery':
     case 'parrySuccess':
