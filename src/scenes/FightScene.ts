@@ -10,6 +10,7 @@ type RoundMode = 'select' | 'tutorial' | 'fight' | 'over';
 type CharacterId = 'male' | 'female';
 type TouchButtonId = 'left' | 'right' | 'light' | 'heavy' | 'block' | 'special' | 'throw';
 type DemoPose = 'heavyActive' | 'throwVictim' | 'blocking' | 'parry';
+type SfxKey = 'hit' | 'block' | 'counter' | 'throw' | 'parry';
 
 interface TouchButton {
   id: TouchButtonId;
@@ -90,6 +91,7 @@ const FEMALE_FRAMES = {
 } as const;
 
 const DEMO_POSES = new Set<DemoPose>(['heavyActive', 'throwVictim', 'blocking', 'parry']);
+const SFX_KEYS = new Set<string>(['hit', 'block', 'counter', 'throw', 'parry']);
 
 const MALE_FRAMES = {
   throwVictimCaught: 16,
@@ -120,6 +122,7 @@ export class FightScene extends Phaser.Scene {
   private showDebugBoxes = true;
   private useIdleAi = false;
   private demoPose?: DemoPose;
+  private unavailableSfx = new Set<SfxKey>();
 
   private keys!: KeyMap;
   private playerSprite!: Phaser.GameObjects.Sprite;
@@ -156,11 +159,11 @@ export class FightScene extends Phaser.Scene {
       frameWidth: CHARACTER_SHEETS.female.frameWidth,
       frameHeight: CHARACTER_SHEETS.female.frameHeight,
     });
-    this.load.audio('hit', 'assets/audio/hit.ogg');
-    this.load.audio('block', 'assets/audio/block.ogg');
-    this.load.audio('counter', 'assets/audio/counter.ogg');
-    this.load.audio('throw', 'assets/audio/throw.ogg');
-    this.load.audio('parry', 'assets/audio/parry.ogg');
+    this.load.audio('hit', ['assets/audio/hit.wav', 'assets/audio/hit.ogg']);
+    this.load.audio('block', ['assets/audio/block.wav', 'assets/audio/block.ogg']);
+    this.load.audio('counter', ['assets/audio/counter.wav', 'assets/audio/counter.ogg']);
+    this.load.audio('throw', ['assets/audio/throw.wav', 'assets/audio/throw.ogg']);
+    this.load.audio('parry', ['assets/audio/parry.wav', 'assets/audio/parry.ogg']);
   }
 
   create(): void {
@@ -793,8 +796,19 @@ export class FightScene extends Phaser.Scene {
     }
 
     const key = event.type === 'counter' ? 'counter' : event.type;
-    if (['hit', 'block', 'counter', 'throw', 'parry'].includes(key)) {
-      this.sound.play(key, { volume: event.type === 'counter' ? 0.8 : 0.55 });
+    if (isSfxKey(key)) {
+      this.playSfx(key, event.type === 'counter' ? 0.8 : 0.55);
+    }
+  }
+
+  private playSfx(key: SfxKey, volume: number): void {
+    if (this.unavailableSfx.has(key)) return;
+
+    try {
+      this.sound.play(key, { volume });
+    } catch (error) {
+      this.unavailableSfx.add(key);
+      console.warn(`Skipping unavailable sound effect: ${key}`, error);
     }
   }
 
@@ -1212,6 +1226,10 @@ function textStyle(size: number, color: string): Phaser.Types.GameObjects.Text.T
 
 function characterSheetKey(character: CharacterId): string {
   return CHARACTER_SHEETS[character].key;
+}
+
+function isSfxKey(key: string): key is SfxKey {
+  return SFX_KEYS.has(key);
 }
 
 function femaleVisualScaleCorrection(sprite: Phaser.GameObjects.Sprite, fighter: FighterModel): number {

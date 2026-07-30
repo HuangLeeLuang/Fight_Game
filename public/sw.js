@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fight-game-offline-v1';
+const CACHE_NAME = 'fight-game-offline-v2';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -7,10 +7,15 @@ const CORE_ASSETS = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-512.png',
+  './assets/audio/block.wav',
   './assets/audio/block.ogg',
+  './assets/audio/counter.wav',
   './assets/audio/counter.ogg',
+  './assets/audio/hit.wav',
   './assets/audio/hit.ogg',
+  './assets/audio/parry.wav',
   './assets/audio/parry.ogg',
+  './assets/audio/throw.wav',
   './assets/audio/throw.ogg',
   './assets/characters/female-striker.png',
   './assets/characters/male-soldier.png',
