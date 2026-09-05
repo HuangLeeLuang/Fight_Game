@@ -50,7 +50,11 @@ The workflow at `.github/workflows/deploy-pages.yml` builds and deploys `dist` w
 - Tech stack: Phaser 3 + TypeScript + Vite.
 - First delivery: static website folder via `pnpm build`.
 - Characters: two selectable fighters, a flat-top tactical soldier and an original female fighter named `女格鬥家`.
-- Combat animation: both fighters use AI-generated 16-frame sprite sheets for idle, step, jab startup, left jab, side kick, throw attacker, throw victim, hitstun, knockdown, block, and parry poses.
+- Combat animation: every original action frame now has two additional in-between images. The male fighter plays 42 key poses + 84 transitions (126 frames), while the female fighter plays 40 key poses + 80 transitions (120 frames). All standing and walking images share a fixed body-height baseline, so motion never changes character scale. The six mobile-optimized sheets stay below common GPU texture limits.
+- App icon: a cyan-vs-red colliding-fists emblem is supplied at 1024px master, 512px, 192px, Apple Touch 180px, and a separately padded Android maskable 512px size.
+- Seamless arena: three repeating parallax tile layers use edge-safe textures and integer tile offsets so the infinite background loop has no visible seam.
+- Campaign setup: choose 1, 3, 5, or 8 enemies and 75%-200% base enemy strength before selecting a fighter. Later enemies gain health, damage, faster reactions, and fewer AI mistakes.
+- Shop: each victory before the final enemy awards coins. Spend them on max-health, punch-damage, or kick-damage upgrades; products and prices are centralized in `src/game/campaign.ts` for easy customization.
 - Throw identity: the male soldier uses an original military grappling takedown; `女格鬥家` uses an original Kimura-style armlock finish. Throw attacker and throw victim are separate frames so any character pair can be composited at runtime.
 - Combat presentation: optional visible active hitboxes during strikes/throws, optional hurtboxes while active, and impact sparks at the resolved hit position.
 - Match: selected player fighter versus the other fighter as AI rival, single-round match.

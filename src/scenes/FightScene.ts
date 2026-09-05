@@ -1,12 +1,26 @@
 import Phaser from 'phaser';
 import { SimpleAiController } from '../game/ai';
+import {
+  ENEMY_COUNT_OPTIONS,
+  ENEMY_STRENGTH_OPTIONS,
+  SHOP_PRODUCTS,
+  emptyUpgrades,
+  enemyDamageMultiplier,
+  enemyHealthMultiplier,
+  productLevel,
+  productPrice,
+  victoryReward,
+  type CampaignSettings,
+  type PlayerUpgrades,
+  type ShopProduct,
+} from '../game/campaign';
 import { BattleEngine } from '../game/combat';
 import { ATTACKS, FIGHTER, GAME_HEIGHT, GAME_WIDTH, PARRY, ROUND_FLOW, ROUND_TIME_MS, STAGE, THROW } from '../game/constants';
 import { activeActionBox, fighterHurtbox, overlapPoint, throwHitbox, type CombatBox } from '../game/hitboxes';
 import { ComboInputBuffer } from '../game/inputBuffer';
 import type { BattleSnapshot, CombatEvent, Facing, FighterId, FighterIntent, FighterModel } from '../game/types';
 
-type RoundMode = 'select' | 'tutorial' | 'fight' | 'over';
+type RoundMode = 'select' | 'tutorial' | 'fight' | 'shop' | 'over';
 type CharacterId = 'male' | 'female';
 type TouchButtonId = 'left' | 'right' | 'light' | 'heavy' | 'block' | 'special' | 'throw';
 type DemoPose = 'heavyActive' | 'throwVictim' | 'blocking' | 'blockstun' | 'parry' | 'parryFlash';
@@ -57,6 +71,12 @@ interface WorldViewport {
   centerY: number;
 }
 
+interface ProductUi {
+  product: ShopProduct;
+  card: Phaser.GameObjects.Rectangle;
+  status: Phaser.GameObjects.Text;
+}
+
 const TUTORIAL_STEPS = [
   '教學 1/4：靠近對手並用輕攻擊或重攻擊命中。',
   '教學 2/4：按住防禦擋住攻擊，或按特殊鍵招架。',
@@ -64,9 +84,26 @@ const TUTORIAL_STEPS = [
   '教學 4/4：等對手出招前搖時命中，打出 COUNTER。',
 ];
 
-const CHARACTER_SHEETS: Record<CharacterId, { key: string; frameWidth: number; frameHeight: number }> = {
-  male: { key: 'character-male-actions', frameWidth: 384, frameHeight: 512 },
-  female: { key: 'character-female-actions', frameWidth: 448, frameHeight: 512 },
+interface CharacterSheetSpec {
+  keys: [string, string, string];
+  files: [string, string, string];
+  frameWidth: number;
+  frameHeight: number;
+}
+
+const CHARACTER_SHEETS: Record<CharacterId, CharacterSheetSpec> = {
+  male: {
+    keys: ['character-male-key', 'character-male-between-a', 'character-male-between-b'],
+    files: ['male-actions-v3-key.png', 'male-actions-v3-inbetween-a.png', 'male-actions-v3-inbetween-b.png'],
+    frameWidth: 192,
+    frameHeight: 256,
+  },
+  female: {
+    keys: ['character-female-key', 'character-female-between-a', 'character-female-between-b'],
+    files: ['female-actions-v3-key.png', 'female-actions-v3-inbetween-a.png', 'female-actions-v3-inbetween-b.png'],
+    frameWidth: 224,
+    frameHeight: 256,
+  },
 };
 
 const BASE_FRAME_DISPLAY_HEIGHT = 310;
@@ -114,6 +151,24 @@ const MALE_FRAMES = {
   throwVictimGetUp: 21,
   throwVictimGuardLow: 22,
   throwVictimRecover: 23,
+  idleBreath: 24,
+  walkStart: 25,
+  walkPass: 26,
+  walkRecover: 27,
+  jabPrepare: 28,
+  jabExtend: 29,
+  jabRecover: 30,
+  kickChamber: 31,
+  kickExtend: 32,
+  throwReach: 33,
+  throwPull: 34,
+  throwRecover: 35,
+  hitRecoil: 36,
+  hitDeep: 37,
+  groundedRecover: 38,
+  guardSettle: 39,
+  guardBrace: 40,
+  parryReach: 41,
 } as const;
 
 export class FightScene extends Phaser.Scene {
@@ -129,6 +184,7 @@ export class FightScene extends Phaser.Scene {
   private playerParryFlashTimer = 0;
   private aiParryFlashTimer = 0;
   private sceneTimeMs = 0;
+  private backgroundTravel = 0;
   private sparkTimer = 0;
   private lastPlayerX = 315;
   private lastAiX = 645;
@@ -139,6 +195,11 @@ export class FightScene extends Phaser.Scene {
   private unavailableSfx = new Set<SfxKey>();
   private arenaBackdrop!: Phaser.GameObjects.Rectangle;
   private arenaWidthRects: Phaser.GameObjects.Rectangle[] = [];
+  private arenaTiles: Phaser.GameObjects.TileSprite[] = [];
+  private campaignSettings: CampaignSettings = { enemyCount: 3, enemyStrength: 1 };
+  private currentEnemy = 1;
+  private coins = 0;
+  private upgrades: PlayerUpgrades = emptyUpgrades();
 
   private keys!: KeyMap;
   private playerSprite!: Phaser.GameObjects.Sprite;
@@ -160,6 +221,13 @@ export class FightScene extends Phaser.Scene {
   private orientationBackdrop!: Phaser.GameObjects.Rectangle;
   private selectionOverlay!: Phaser.GameObjects.Container;
   private selectionBackdrop!: Phaser.GameObjects.Rectangle;
+  private enemyCountText!: Phaser.GameObjects.Text;
+  private enemyStrengthText!: Phaser.GameObjects.Text;
+  private shopOverlay!: Phaser.GameObjects.Container;
+  private shopBackdrop!: Phaser.GameObjects.Rectangle;
+  private shopCoinsText!: Phaser.GameObjects.Text;
+  private shopProgressText!: Phaser.GameObjects.Text;
+  private productUi: ProductUi[] = [];
   private attackArc!: Phaser.GameObjects.Rectangle;
   private throwRangeHint!: Phaser.GameObjects.Rectangle;
   private playerHurtboxViz!: Phaser.GameObjects.Rectangle;
@@ -169,13 +237,14 @@ export class FightScene extends Phaser.Scene {
   private touchButtons = new Map<TouchButtonId, TouchButton>();
 
   preload(): void {
-    this.load.spritesheet('character-male-actions', 'assets/characters/sheets/male-actions.png', {
-      frameWidth: CHARACTER_SHEETS.male.frameWidth,
-      frameHeight: CHARACTER_SHEETS.male.frameHeight,
-    });
-    this.load.spritesheet('character-female-actions', 'assets/characters/sheets/female-actions.png', {
-      frameWidth: CHARACTER_SHEETS.female.frameWidth,
-      frameHeight: CHARACTER_SHEETS.female.frameHeight,
+    (Object.keys(CHARACTER_SHEETS) as CharacterId[]).forEach((character) => {
+      const sheet = CHARACTER_SHEETS[character];
+      sheet.keys.forEach((key, phase) => {
+        this.load.spritesheet(key, `assets/characters/sheets/${sheet.files[phase]}`, {
+          frameWidth: sheet.frameWidth,
+          frameHeight: sheet.frameHeight,
+        });
+      });
     });
     this.load.audio('hit', ['assets/audio/hit.wav', 'assets/audio/hit.ogg']);
     this.load.audio('block', ['assets/audio/block.wav', 'assets/audio/block.ogg']);
@@ -190,6 +259,7 @@ export class FightScene extends Phaser.Scene {
     this.createFighters();
     this.createUi();
     this.createSelectionOverlay();
+    this.createShopOverlay();
     this.createTouchControls();
     this.createOrientationOverlay();
     this.installResponsiveLayout();
@@ -202,6 +272,7 @@ export class FightScene extends Phaser.Scene {
   update(_time: number, delta: number): void {
     const dt = Math.min(delta, 34);
     this.sceneTimeMs += dt;
+    this.updateArena(dt);
     this.updateOrientationOverlay();
 
     if (Phaser.Input.Keyboard.JustDown(this.keys.debugToggle)) {
@@ -210,6 +281,12 @@ export class FightScene extends Phaser.Scene {
 
     if (this.mode === 'select') {
       this.handleSelectionInput();
+      this.clearTouchPresses();
+      return;
+    }
+
+    if (this.mode === 'shop') {
+      this.render(this.engine.snapshot());
       this.clearTouchPresses();
       return;
     }
@@ -300,6 +377,41 @@ export class FightScene extends Phaser.Scene {
   }
 
   private createTextures(): void {
+    const far = this.make.graphics({ x: 0, y: 0 });
+    far.fillStyle(0x111c31, 1).fillRect(0, 100, 320, 80);
+    const farBuildings = [
+      [10, 44, 54, 136], [72, 76, 42, 104], [122, 24, 62, 156],
+      [194, 62, 48, 118], [252, 36, 58, 144],
+    ];
+    for (const [x, y, width, height] of farBuildings) {
+      far.fillStyle(0x17243a, 1).fillRect(x, y, width, height);
+      far.fillStyle(0x38bdf8, 0.22);
+      for (let windowY = y + 16; windowY < y + height - 10; windowY += 24) {
+        far.fillRect(x + 10, windowY, 5, 7).fillRect(x + width - 16, windowY, 5, 7);
+      }
+    }
+    far.generateTexture('arena-far-city', 320, 180);
+    far.destroy();
+
+    const rail = this.make.graphics({ x: 0, y: 0 });
+    rail.fillStyle(0x0b1220, 0.94).fillRect(0, 74, 192, 16);
+    rail.fillStyle(0x334155, 0.85).fillRect(0, 48, 192, 5);
+    for (let x = 0; x < 192; x += 48) {
+      rail.fillStyle(0x475569, 0.9).fillRect(x, 28, 6, 62);
+      rail.fillStyle(0x22d3ee, 0.72).fillRect(x + 12, 38, 18, 5);
+      rail.fillStyle(0xf43f5e, 0.6).fillRect(x + 34, 58, 8, 4);
+    }
+    rail.generateTexture('arena-neon-rail', 192, 90);
+    rail.destroy();
+
+    const ground = this.make.graphics({ x: 0, y: 0 });
+    ground.fillStyle(0x252c39, 1).fillRect(0, 0, 128, 120);
+    ground.fillStyle(0x3b4555, 1).fillRect(0, 0, 128, 8);
+    ground.lineStyle(2, 0x111827, 0.7);
+    ground.lineBetween(0, 42, 128, 42).lineBetween(0, 82, 128, 82);
+    ground.lineBetween(32, 0, 12, 120).lineBetween(96, 0, 116, 120);
+    ground.generateTexture('arena-ground', 128, 120);
+    ground.destroy();
   }
 
   private createArena(): void {
@@ -308,13 +420,23 @@ export class FightScene extends Phaser.Scene {
     this.arenaWidthRects = [
       this.add.rectangle(GAME_WIDTH / 2, 262, worldFillWidth, 300, 0x151b25),
       this.add.rectangle(GAME_WIDTH / 2, 146, worldFillWidth, 90, 0x202a38).setAlpha(0.65),
-      this.add.rectangle(GAME_WIDTH / 2, STAGE.floorY + 42, worldFillWidth, 120, 0x2f3542),
       this.add.rectangle(GAME_WIDTH / 2, STAGE.floorY - 8, worldFillWidth, 10, 0xcbd5e1),
     ];
+    this.arenaTiles = [
+      this.add.tileSprite(GAME_WIDTH / 2, 136, worldFillWidth, 180, 'arena-far-city').setOrigin(0.5, 0),
+      this.add.tileSprite(GAME_WIDTH / 2, 306, worldFillWidth, 90, 'arena-neon-rail').setOrigin(0.5, 0),
+      this.add.tileSprite(GAME_WIDTH / 2, STAGE.floorY - 2, worldFillWidth, 120, 'arena-ground').setOrigin(0.5, 0),
+    ];
+  }
 
-    for (let i = 0; i < 12; i += 1) {
-      this.add.rectangle(90 + i * 72, 205 + (i % 2) * 18, 44, 130, 0x263244).setAlpha(0.62);
-    }
+  private updateArena(dtMs: number): void {
+    const fighterTravel = this.mode === 'fight' || this.mode === 'tutorial'
+      ? this.engine.player.x - this.lastPlayerX
+      : 0;
+    this.backgroundTravel += fighterTravel + dtMs * 0.005;
+    if (this.arenaTiles[0]) this.arenaTiles[0].tilePositionX = Math.floor(this.backgroundTravel * 0.16);
+    if (this.arenaTiles[1]) this.arenaTiles[1].tilePositionX = Math.floor(this.backgroundTravel * 0.38);
+    if (this.arenaTiles[2]) this.arenaTiles[2].tilePositionX = Math.floor(this.backgroundTravel * 0.72);
   }
 
   private createFighters(): void {
@@ -422,18 +544,60 @@ export class FightScene extends Phaser.Scene {
     const bg = this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x0d1017, 0.92);
     this.selectionBackdrop = bg;
     const title = this.add
-      .text(GAME_WIDTH / 2, 74, '選擇你的角色', textStyle(34, '#f8fafc'))
+      .text(GAME_WIDTH / 2, 42, '選擇你的角色', textStyle(31, '#f8fafc'))
       .setOrigin(0.5);
     const subtitle = this.add
-      .text(GAME_WIDTH / 2, 112, '鍵盤按 1 / 2，或點選卡片開始教學', textStyle(17, '#cbd5e1'))
+      .text(GAME_WIDTH / 2, 77, '先設定挑戰，再按 1 / 2 或點選角色', textStyle(15, '#cbd5e1'))
       .setOrigin(0.5);
+    const countControls = this.createSetupStepper(330, 120, '敵人數量', () => this.cycleEnemyCount(-1), () => this.cycleEnemyCount(1), (text) => { this.enemyCountText = text; });
+    const strengthControls = this.createSetupStepper(630, 120, '敵人強度', () => this.cycleEnemyStrength(-1), () => this.cycleEnemyStrength(1), (text) => { this.enemyStrengthText = text; });
     const maleCard = this.createCharacterCard(310, 'male', '1', '平頭戰術兵', '穩定、防守讀招');
     const femaleCard = this.createCharacterCard(650, 'female', '2', '女格鬥家', '靈活、近身壓迫');
 
     this.selectionOverlay = this.add
-      .container(0, 0, [bg, title, subtitle, ...maleCard, ...femaleCard])
+      .container(0, 0, [bg, title, subtitle, ...countControls, ...strengthControls, ...maleCard, ...femaleCard])
       .setDepth(40)
       .setVisible(false);
+    this.updateSetupLabels();
+  }
+
+  private createSetupStepper(
+    x: number,
+    y: number,
+    label: string,
+    decrease: () => void,
+    increase: () => void,
+    captureValue: (text: Phaser.GameObjects.Text) => void,
+  ): Phaser.GameObjects.GameObject[] {
+    const labelText = this.add.text(x - 92, y, label, textStyle(15, '#cbd5e1')).setOrigin(0, 0.5);
+    const minus = this.add.rectangle(x + 24, y, 32, 28, 0x334155, 0.95).setStrokeStyle(1, 0x94a3b8).setInteractive({ useHandCursor: true });
+    const minusText = this.add.text(x + 24, y - 1, '−', textStyle(19, '#ffffff')).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    const value = this.add.text(x + 72, y, '', textStyle(16, '#67e8f9')).setOrigin(0.5);
+    const plus = this.add.rectangle(x + 120, y, 32, 28, 0x164e63, 0.95).setStrokeStyle(1, 0x67e8f9).setInteractive({ useHandCursor: true });
+    const plusText = this.add.text(x + 120, y - 1, '+', textStyle(18, '#ffffff')).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    minus.on('pointerdown', decrease);
+    minusText.on('pointerdown', decrease);
+    plus.on('pointerdown', increase);
+    plusText.on('pointerdown', increase);
+    captureValue(value);
+    return [labelText, minus, minusText, value, plus, plusText];
+  }
+
+  private cycleEnemyCount(direction: number): void {
+    const index = ENEMY_COUNT_OPTIONS.indexOf(this.campaignSettings.enemyCount);
+    this.campaignSettings.enemyCount = ENEMY_COUNT_OPTIONS[Phaser.Math.Wrap(index + direction, 0, ENEMY_COUNT_OPTIONS.length)];
+    this.updateSetupLabels();
+  }
+
+  private cycleEnemyStrength(direction: number): void {
+    const index = ENEMY_STRENGTH_OPTIONS.indexOf(this.campaignSettings.enemyStrength);
+    this.campaignSettings.enemyStrength = ENEMY_STRENGTH_OPTIONS[Phaser.Math.Wrap(index + direction, 0, ENEMY_STRENGTH_OPTIONS.length)];
+    this.updateSetupLabels();
+  }
+
+  private updateSetupLabels(): void {
+    this.enemyCountText?.setText(`${this.campaignSettings.enemyCount} 名`);
+    this.enemyStrengthText?.setText(`${Math.round(this.campaignSettings.enemyStrength * 100)}%`);
   }
 
   private createCharacterCard(
@@ -444,22 +608,94 @@ export class FightScene extends Phaser.Scene {
     role: string,
   ): Phaser.GameObjects.GameObject[] {
     const card = this.add
-      .rectangle(x, 318, 276, 380, 0x172033, 0.96)
+      .rectangle(x, 330, 276, 340, 0x172033, 0.96)
       .setStrokeStyle(2, 0x93c5fd, 0.55)
       .setInteractive({ useHandCursor: true });
-    const label = this.add.text(x, 146, `${hotkey}. ${name}`, textStyle(21, '#ffffff')).setOrigin(0.5);
-    const portraitY = 430;
+    const label = this.add.text(x, 178, `${hotkey}. ${name}`, textStyle(21, '#ffffff')).setOrigin(0.5);
+    const portraitY = 452;
     const portrait = this.add.sprite(x, portraitY, characterSheetKey(character), 0).setOrigin(0.5, 1);
-    portrait.displayHeight = 266;
+    portrait.displayHeight = 250;
     portrait.scaleX = portrait.scaleY;
-    const desc = this.add.text(x, 474, role, textStyle(16, '#cbd5e1')).setOrigin(0.5);
+    const desc = this.add.text(x, 482, role, textStyle(16, '#cbd5e1')).setOrigin(0.5);
     const start = () => {
       this.selectedCharacter = character;
+      this.beginCampaign();
       this.startTutorial();
     };
     card.on('pointerdown', start);
     portrait.setInteractive({ useHandCursor: true }).on('pointerdown', start);
     return [card, portrait, label, desc];
+  }
+
+  private createShopOverlay(): void {
+    this.shopBackdrop = this.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x07111f, 0.96);
+    const title = this.add.text(GAME_WIDTH / 2, 58, '補給商店', textStyle(34, '#67e8f9')).setOrigin(0.5);
+    this.shopProgressText = this.add.text(GAME_WIDTH / 2, 100, '', textStyle(17, '#cbd5e1')).setOrigin(0.5);
+    this.shopCoinsText = this.add.text(GAME_WIDTH / 2, 132, '', textStyle(21, '#facc15')).setOrigin(0.5);
+    const children: Phaser.GameObjects.GameObject[] = [this.shopBackdrop, title, this.shopProgressText, this.shopCoinsText];
+
+    SHOP_PRODUCTS.forEach((product, index) => {
+      const x = 190 + index * 290;
+      const card = this.add.rectangle(x, 300, 250, 218, 0x172033, 0.98).setStrokeStyle(2, 0x38bdf8, 0.55).setInteractive({ useHandCursor: true });
+      const name = this.add.text(x, 235, product.name, textStyle(21, '#ffffff')).setOrigin(0.5).setInteractive({ useHandCursor: true });
+      const desc = this.add.text(x, 278, product.description, textStyle(16, '#cbd5e1')).setOrigin(0.5);
+      const status = this.add.text(x, 340, '', textStyle(15, '#facc15')).setOrigin(0.5).setAlign('center').setInteractive({ useHandCursor: true });
+      const buy = () => this.buyProduct(product);
+      card.on('pointerdown', buy);
+      name.on('pointerdown', buy);
+      status.on('pointerdown', buy);
+      this.productUi.push({ product, card, status });
+      children.push(card, name, desc, status);
+    });
+
+    const continueButton = this.add.rectangle(GAME_WIDTH / 2, 462, 220, 48, 0x0f766e, 0.95).setStrokeStyle(2, 0x5eead4).setInteractive({ useHandCursor: true });
+    const continueText = this.add.text(GAME_WIDTH / 2, 462, '迎戰下一名敵人', textStyle(19, '#ecfeff')).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    const continueFight = () => {
+      this.currentEnemy += 1;
+      this.shopOverlay.setVisible(false);
+      this.startFight();
+    };
+    continueButton.on('pointerdown', continueFight);
+    continueText.on('pointerdown', continueFight);
+    children.push(continueButton, continueText);
+    this.shopOverlay = this.add.container(0, 0, children).setDepth(45).setVisible(false);
+  }
+
+  private beginCampaign(): void {
+    this.currentEnemy = 1;
+    this.coins = 0;
+    this.upgrades = emptyUpgrades();
+  }
+
+  private buyProduct(product: ShopProduct): void {
+    const level = productLevel(product, this.upgrades);
+    const price = productPrice(product, level);
+    if (level >= product.maxLevel || this.coins < price) return;
+    this.coins -= price;
+    this.upgrades[product.stat] += product.amount;
+    this.updateShopUi();
+    this.playSfx('parry', 0.38);
+  }
+
+  private updateShopUi(): void {
+    this.shopProgressText.setText(`已擊敗 ${this.currentEnemy} / ${this.campaignSettings.enemyCount} · 下一戰敵人更強`);
+    this.shopCoinsText.setText(`戰利幣 ${this.coins}`);
+    for (const ui of this.productUi) {
+      const level = productLevel(ui.product, this.upgrades);
+      const maxed = level >= ui.product.maxLevel;
+      const price = productPrice(ui.product, level);
+      ui.status.setText(maxed ? `LV.${level} · 已滿級` : `LV.${level} → ${level + 1}\n購買 ${price} 幣`);
+      ui.card.setStrokeStyle(2, maxed ? 0x64748b : this.coins >= price ? 0x67e8f9 : 0x475569, maxed ? 0.4 : 0.75);
+    }
+  }
+
+  private openShop(): void {
+    this.mode = 'shop';
+    this.setRoundOverActionsVisible(false);
+    this.setDebugToggleVisible(false);
+    this.setTouchControlsVisible(false);
+    this.shopOverlay.setVisible(true);
+    this.updateShopUi();
   }
 
   private createTouchControls(): void {
@@ -542,7 +778,11 @@ export class FightScene extends Phaser.Scene {
     for (const rect of this.arenaWidthRects) {
       this.resizeWorldWidthRect(rect, bounds, 8);
     }
+    for (const tile of this.arenaTiles) {
+      tile.setPosition(bounds.centerX, tile.y).setSize(bounds.width + 16, tile.height).setDisplaySize(bounds.width + 16, tile.height);
+    }
     this.resizeFullscreenRect(this.selectionBackdrop, bounds, 0);
+    this.resizeFullscreenRect(this.shopBackdrop, bounds, 0);
     this.resizeFullscreenRect(this.orientationBackdrop, bounds, 0);
     this.layoutTouchControls(bounds);
     this.updateOrientationOverlay();
@@ -609,6 +849,13 @@ export class FightScene extends Phaser.Scene {
 
   private startTutorial(): void {
     this.demoPose = undefined;
+    this.engine.configure({
+      playerMaxHealth: FIGHTER.maxHealth,
+      aiMaxHealth: FIGHTER.maxHealth,
+      playerLightMultiplier: 1,
+      playerHeavyMultiplier: 1,
+      aiDamageMultiplier: 1,
+    });
     this.engine.reset();
     this.ai.reset();
     this.inputBuffer.reset();
@@ -628,7 +875,17 @@ export class FightScene extends Phaser.Scene {
 
   private startFight(): void {
     this.demoPose = undefined;
+    const playerMaxHealth = FIGHTER.maxHealth + this.upgrades.maxHealth;
+    const aiMaxHealth = Math.round(FIGHTER.maxHealth * enemyHealthMultiplier(this.campaignSettings, this.currentEnemy));
+    this.engine.configure({
+      playerMaxHealth,
+      aiMaxHealth,
+      playerLightMultiplier: 1 + this.upgrades.lightPower,
+      playerHeavyMultiplier: 1 + this.upgrades.heavyPower,
+      aiDamageMultiplier: enemyDamageMultiplier(this.campaignSettings, this.currentEnemy),
+    });
     this.engine.reset();
+    this.ai.setDifficulty(this.campaignSettings.enemyStrength * (1 + (this.currentEnemy - 1) * 0.04));
     this.ai.reset();
     this.inputBuffer.reset();
     this.resetSuccessFlashTimers();
@@ -636,18 +893,20 @@ export class FightScene extends Phaser.Scene {
     this.setRoundOverActionsVisible(false);
     this.mode = 'fight';
     this.selectionOverlay.setVisible(false);
+    this.shopOverlay.setVisible(false);
     this.setDebugToggleVisible(true);
     this.roundOverTimer = 0;
     this.modeText.setVisible(true);
     this.positionModeTextForPlay();
-    this.modeText.setText('FIGHT');
-    this.hintText.setText('抓前搖打 Counter，後退誘空接重攻擊，防禦逼對手露破綻。');
+    this.modeText.setText(`FIGHT · 敵人 ${this.currentEnemy}/${this.campaignSettings.enemyCount}`);
+    this.hintText.setText(`強度 ${Math.round(this.campaignSettings.enemyStrength * 100)}% · 抓前搖打 Counter，勝利可進商店強化。`);
   }
 
   private showCharacterSelect(): void {
     this.mode = 'select';
     this.resetSuccessFlashTimers();
     this.selectionOverlay.setVisible(true);
+    this.shopOverlay.setVisible(false);
     this.setRoundOverActionsVisible(false);
     this.modeText.setVisible(true);
     this.positionModeTextForPlay();
@@ -670,6 +929,7 @@ export class FightScene extends Phaser.Scene {
     if (character !== 'male' && character !== 'female') return;
 
     this.selectedCharacter = character;
+    this.beginCampaign();
     this.useIdleAi = params.get('ai') === 'idle';
     if (params.get('mode') === 'fight') {
       this.startFight();
@@ -700,8 +960,8 @@ export class FightScene extends Phaser.Scene {
 
     const roundOver = params.get('roundOver');
     if (this.mode === 'fight' && (roundOver === 'player' || roundOver === 'ai' || roundOver === 'draw')) {
-      this.engine.player.health = roundOver === 'ai' ? 0 : FIGHTER.maxHealth;
-      this.engine.ai.health = roundOver === 'player' ? 0 : FIGHTER.maxHealth;
+      this.engine.player.health = roundOver === 'ai' ? 0 : this.engine.player.maxHealth;
+      this.engine.ai.health = roundOver === 'player' ? 0 : this.engine.ai.maxHealth;
       this.engine.winner = roundOver === 'draw' ? undefined : roundOver;
       this.engine.roundOver = true;
       this.finishRound(this.engine.snapshot());
@@ -755,9 +1015,11 @@ export class FightScene extends Phaser.Scene {
   private handleSelectionInput(): void {
     if (Phaser.Input.Keyboard.JustDown(this.keys.chooseMale)) {
       this.selectedCharacter = 'male';
+      this.beginCampaign();
       this.startTutorial();
     } else if (Phaser.Input.Keyboard.JustDown(this.keys.chooseFemale)) {
       this.selectedCharacter = 'female';
+      this.beginCampaign();
       this.startTutorial();
     }
   }
@@ -872,14 +1134,21 @@ export class FightScene extends Phaser.Scene {
   }
 
   private finishRound(snapshot: BattleSnapshot): void {
-    if (this.mode === 'over') return;
+    if (this.mode === 'over' || this.mode === 'shop') return;
+    if (snapshot.winner === 'player' && this.currentEnemy < this.campaignSettings.enemyCount) {
+      this.coins += victoryReward(this.campaignSettings, this.currentEnemy);
+      this.openShop();
+      return;
+    }
     this.mode = 'over';
     this.roundOverTimer = ROUND_FLOW.roundOverMs;
-    const result = snapshot.winner === 'player' ? 'YOU WIN' : snapshot.winner === 'ai' ? 'YOU LOSE' : 'DRAW';
+    const result = snapshot.winner === 'player'
+      ? this.currentEnemy >= this.campaignSettings.enemyCount ? 'CAMPAIGN CLEAR' : 'YOU WIN'
+      : snapshot.winner === 'ai' ? 'YOU LOSE' : 'DRAW';
     this.modeText.setVisible(true);
     this.modeText.setText(result);
     this.modeText.setY(154).setFontSize(34);
-    this.hintText.setText('R：再戰同角色　Enter：回到選角');
+    this.hintText.setText(snapshot.winner === 'player' ? '全數敵人擊破！Enter 回到設定' : 'R：重試目前敵人　Enter：回到設定');
     this.hintText.setVisible(!this.isTouchUiVisible);
     this.setRoundOverActionsVisible(true);
   }
@@ -908,8 +1177,8 @@ export class FightScene extends Phaser.Scene {
     this.renderThrowRangeHint(snapshot);
     this.renderSpark();
 
-    this.playerBar.width = 332 * (snapshot.player.health / FIGHTER.maxHealth);
-    this.aiBar.width = 332 * (snapshot.ai.health / FIGHTER.maxHealth);
+    this.playerBar.width = 332 * (snapshot.player.health / snapshot.player.maxHealth);
+    this.aiBar.width = 332 * (snapshot.ai.health / snapshot.ai.maxHealth);
     this.timerText.setText(String(Math.ceil(snapshot.timeRemainingMs / 1000)).padStart(2, '0'));
 
     if (this.eventTextTimer > 0) {
@@ -1234,13 +1503,15 @@ export class FightScene extends Phaser.Scene {
 
   private setFighterFrame(sprite: Phaser.GameObjects.Sprite, fighter: FighterModel, previousX: number): void {
     const moving = Math.abs(fighter.x - previousX) > 0.35;
-    const isFemale = sprite.texture.key === characterSheetKey('female');
-    sprite.setFrame(frameForFighter(fighter, moving, isFemale, this.sceneTimeMs));
+    const character: CharacterId = isFemaleTexture(sprite.texture.key) ? 'female' : 'male';
+    const frame = frameForFighter(fighter, moving, character === 'female', this.sceneTimeMs);
+    const phase = transitionPhase(fighter, moving, this.sceneTimeMs);
+    sprite.setTexture(characterSheetKey(character, phase), frame);
   }
 
   private applyFighterPose(sprite: Phaser.GameObjects.Sprite, fighter: FighterModel, pose: FighterPose): void {
     const baseScale = BASE_FRAME_DISPLAY_HEIGHT / sprite.height;
-    const floorLift = sprite.texture.key === characterSheetKey('female') ? FEMALE_FLOOR_LIFT : 0;
+    const floorLift = isFemaleTexture(sprite.texture.key) ? FEMALE_FLOOR_LIFT : 0;
     const visualScale = femaleVisualScaleCorrection(sprite, fighter);
     sprite
       .setPosition(fighter.x + pose.offsetX, STAGE.floorY + pose.offsetY + floorLift)
@@ -1268,7 +1539,7 @@ export class FightScene extends Phaser.Scene {
     }
 
     const baseScale = BASE_FRAME_DISPLAY_HEIGHT / sprite.height;
-    const floorLift = sprite.texture.key === characterSheetKey('female') ? FEMALE_FLOOR_LIFT : 0;
+    const floorLift = isFemaleTexture(sprite.texture.key) ? FEMALE_FLOOR_LIFT : 0;
     const lag = state.startsWith('throw') ? 28 : attack === 'heavy' ? 24 : 18;
     trail
       .setVisible(true)
@@ -1402,8 +1673,21 @@ function textStyle(size: number, color: string): Phaser.Types.GameObjects.Text.T
   };
 }
 
-function characterSheetKey(character: CharacterId): string {
-  return CHARACTER_SHEETS[character].key;
+function characterSheetKey(character: CharacterId, phase = 0): string {
+  return CHARACTER_SHEETS[character].keys[phase];
+}
+
+function isFemaleTexture(key: string): boolean {
+  return CHARACTER_SHEETS.female.keys.includes(key);
+}
+
+function transitionPhase(fighter: FighterModel, moving: boolean, sceneTimeMs: number): number {
+  let phaseDuration = 42;
+  if (fighter.state.kind === 'idle') phaseDuration = moving ? 27 : 80;
+  else if (fighter.state.kind === 'blocking' || fighter.state.kind === 'blockstun') phaseDuration = 50;
+  else if (fighter.state.kind === 'throwVictim' || fighter.state.kind.startsWith('throw')) phaseDuration = 44;
+  else if (fighter.state.kind === 'hitstun' || fighter.state.kind === 'ko') phaseDuration = 36;
+  return Math.floor(sceneTimeMs / phaseDuration) % 3;
 }
 
 function isSfxKey(key: string): key is SfxKey {
@@ -1411,7 +1695,7 @@ function isSfxKey(key: string): key is SfxKey {
 }
 
 function femaleVisualScaleCorrection(sprite: Phaser.GameObjects.Sprite, fighter: FighterModel): number {
-  if (sprite.texture.key !== characterSheetKey('female')) return 1;
+  if (!isFemaleTexture(sprite.texture.key)) return 1;
 
   const frameIndex = Number(sprite.frame.name);
   if (frameIndex !== 11) return 1;
@@ -1439,40 +1723,59 @@ function frameForFighter(fighter: FighterModel, moving: boolean, isFemale = fals
   if (isFemale) return femaleFrameForFighter(fighter, moving, sceneTimeMs);
 
   switch (fighter.state.kind) {
-    case 'attackWindup':
-      return fighter.state.attack === 'heavy' ? 4 : 2;
-    case 'attackActive':
-      return fighter.state.attack === 'heavy' ? 5 : 3;
+    case 'attackWindup': {
+      const attack = fighter.state.attack ?? 'light';
+      const progress = 1 - fighter.state.remainingMs / ATTACKS[attack].windupMs;
+      if (attack === 'heavy') return progress < 0.58 ? MALE_FRAMES.kickChamber : 4;
+      return progress < 0.52 ? MALE_FRAMES.jabPrepare : 2;
+    }
+    case 'attackActive': {
+      const attack = fighter.state.attack ?? 'light';
+      const progress = 1 - fighter.state.remainingMs / ATTACKS[attack].activeMs;
+      if (attack === 'heavy') return progress < 0.44 ? MALE_FRAMES.kickExtend : 5;
+      return progress < 0.45 ? MALE_FRAMES.jabExtend : 3;
+    }
     case 'attackRecovery':
       {
         const attack = fighter.state.attack ?? 'light';
         const recovery = ATTACKS[attack].recoveryMs;
-        const showActiveFollowThrough = fighter.state.remainingMs > recovery * (attack === 'heavy' ? 0.62 : 0.75);
-        if (showActiveFollowThrough) return attack === 'heavy' ? 5 : 3;
-        return attack === 'heavy' ? 4 : 2;
+        const progress = 1 - fighter.state.remainingMs / recovery;
+        if (attack === 'heavy') {
+          if (progress < 0.34) return 5;
+          if (progress < 0.72) return MALE_FRAMES.kickChamber;
+          return MALE_FRAMES.guardSettle;
+        }
+        if (progress < 0.3) return 3;
+        if (progress < 0.7) return MALE_FRAMES.jabRecover;
+        return MALE_FRAMES.guardSettle;
       }
     case 'throwWindup':
-      return 6;
+      return fighter.state.remainingMs < THROW.windupMs * 0.48 ? MALE_FRAMES.throwReach : 6;
     case 'throwActive':
+      return MALE_FRAMES.throwPull;
     case 'throwRecovery':
-      return 7;
+      return fighter.state.remainingMs > THROW.recoveryMs * 0.56 ? 7 : MALE_FRAMES.throwRecover;
     case 'throwTech':
       return 6;
     case 'throwVictim':
       return maleThrowVictimFrame(fighter);
     case 'hitstun':
-      return 8;
+      return fighter.state.remainingMs > 115 ? MALE_FRAMES.hitDeep : fighter.state.remainingMs > 55 ? MALE_FRAMES.hitRecoil : 8;
     case 'ko':
       return 9;
     case 'blocking':
     case 'blockstun':
-      return 10;
+      return Math.floor(sceneTimeMs / 150) % 2 === 0 ? MALE_FRAMES.guardSettle : MALE_FRAMES.guardBrace;
     case 'parry':
     case 'parryRecovery':
     case 'parrySuccess':
-      return 11;
+      return MALE_FRAMES.parryReach;
     default:
-      return moving ? 1 : 0;
+      if (moving) {
+        const walkFrames = [MALE_FRAMES.walkStart, 1, MALE_FRAMES.walkPass, MALE_FRAMES.walkRecover];
+        return walkFrames[Math.floor(sceneTimeMs / 82) % walkFrames.length];
+      }
+      return Math.floor(sceneTimeMs / 240) % 2 === 0 ? 0 : MALE_FRAMES.idleBreath;
   }
 }
 

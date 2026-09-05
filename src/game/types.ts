@@ -35,10 +35,19 @@ export interface FighterModel {
   x: number;
   facing: Facing;
   health: number;
+  maxHealth: number;
   state: FighterState;
   pendingCommand?: Command;
   commandBufferMs: number;
   throwTechBufferMs: number;
+}
+
+export interface BattleTuning {
+  playerMaxHealth: number;
+  aiMaxHealth: number;
+  playerLightMultiplier: number;
+  playerHeavyMultiplier: number;
+  aiDamageMultiplier: number;
 }
 
 export interface FighterIntent {

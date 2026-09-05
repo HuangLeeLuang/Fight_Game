@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fight-game-offline-v4';
+const CACHE_NAME = 'fight-game-offline-v6';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -19,8 +19,12 @@ const CORE_ASSETS = [
   './assets/audio/throw.ogg',
   './assets/characters/female-striker.png',
   './assets/characters/male-soldier.png',
-  './assets/characters/sheets/female-actions.png',
-  './assets/characters/sheets/male-actions.png'
+  './assets/characters/sheets/female-actions-v3-key.png',
+  './assets/characters/sheets/female-actions-v3-inbetween-a.png',
+  './assets/characters/sheets/female-actions-v3-inbetween-b.png',
+  './assets/characters/sheets/male-actions-v3-key.png',
+  './assets/characters/sheets/male-actions-v3-inbetween-a.png',
+  './assets/characters/sheets/male-actions-v3-inbetween-b.png'
 ];
 
 const scopeUrl = (path) => new URL(path, self.registration.scope).toString();
