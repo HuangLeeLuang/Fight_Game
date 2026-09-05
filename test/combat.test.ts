@@ -236,29 +236,4 @@ describe('BattleEngine', () => {
     expect(snapshot.player.state.kind).toBe('attackWindup');
     expect(snapshot.player.state.attack).toBe('heavy');
   });
-
-  it('applies campaign health and damage tuning', () => {
-    const engine = new BattleEngine();
-    engine.configure({
-      playerMaxHealth: 140,
-      aiMaxHealth: 160,
-      playerLightMultiplier: 1.5,
-      aiDamageMultiplier: 2,
-    });
-    engine.reset();
-
-    expect(engine.player.health).toBe(140);
-    expect(engine.ai.health).toBe(160);
-
-    engine.player.x = 450;
-    engine.ai.x = 500;
-    engine.player.state = {
-      kind: 'attackActive',
-      remainingMs: 60,
-      attack: 'light',
-      hasConnected: false,
-    };
-    const snapshot = engine.update(16, { left: false, right: true, block: false });
-    expect(snapshot.ai.health).toBe(151);
-  });
 });

@@ -12,7 +12,6 @@ import { attackHitbox, fighterHurtbox, overlapPoint, throwHitbox } from './hitbo
 import type {
   AttackKind,
   BattleSnapshot,
-  BattleTuning,
   CombatEvent,
   Command,
   FighterId,
@@ -27,14 +26,6 @@ const EMPTY_INTENT: FighterIntent = {
   block: false,
 };
 
-const DEFAULT_TUNING: BattleTuning = {
-  playerMaxHealth: FIGHTER.maxHealth,
-  aiMaxHealth: FIGHTER.maxHealth,
-  playerLightMultiplier: 1,
-  playerHeavyMultiplier: 1,
-  aiDamageMultiplier: 1,
-};
-
 export class BattleEngine {
   player: FighterModel;
   ai: FighterModel;
@@ -44,21 +35,16 @@ export class BattleEngine {
   hitStopMs = 0;
 
   private events: CombatEvent[] = [];
-  private tuning: BattleTuning = { ...DEFAULT_TUNING };
 
   constructor() {
-    this.player = createFighter('player', 'Player', 315, this.tuning.playerMaxHealth);
-    this.ai = createFighter('ai', 'Rival', 645, this.tuning.aiMaxHealth);
+    this.player = createFighter('player', 'Player', 315);
+    this.ai = createFighter('ai', 'Rival', 645);
     this.faceEachOther();
   }
 
-  configure(tuning: Partial<BattleTuning>): void {
-    this.tuning = { ...this.tuning, ...tuning };
-  }
-
   reset(): void {
-    this.player = createFighter('player', 'Player', 315, this.tuning.playerMaxHealth);
-    this.ai = createFighter('ai', 'Rival', 645, this.tuning.aiMaxHealth);
+    this.player = createFighter('player', 'Player', 315);
+    this.ai = createFighter('ai', 'Rival', 645);
     this.timeRemainingMs = ROUND_TIME_MS;
     this.roundOver = false;
     this.winner = undefined;
@@ -290,13 +276,7 @@ export class BattleEngine {
     }
 
     const counter = isCounterable(defender);
-    const baseDamage = counter ? data.counterDamage : data.damage;
-    const multiplier = attacker.id === 'player'
-      ? attack === 'light'
-        ? this.tuning.playerLightMultiplier
-        : this.tuning.playerHeavyMultiplier
-      : this.tuning.aiDamageMultiplier;
-    const damage = Math.max(1, Math.round(baseDamage * multiplier));
+    const damage = counter ? data.counterDamage : data.damage;
     defender.health = Math.max(0, defender.health - damage);
     defender.state = state('hitstun', data.hitstunMs);
     defender.x += attacker.facing * FIGHTER.hitPush;
@@ -335,11 +315,7 @@ export class BattleEngine {
       return;
     }
 
-    const throwDamage = Math.max(
-      1,
-      Math.round(THROW.damage * (attacker.id === 'ai' ? this.tuning.aiDamageMultiplier : 1)),
-    );
-    defender.health = Math.max(0, defender.health - throwDamage);
+    defender.health = Math.max(0, defender.health - THROW.damage);
     defender.state = state('throwVictim', THROW.victimStunMs);
     attacker.state = state('throwRecovery', THROW.recoveryMs);
     defender.x = attacker.x + attacker.facing * THROW.victimOffset;
@@ -348,7 +324,7 @@ export class BattleEngine {
       type: 'throw',
       source: attacker.id,
       target: defender.id,
-      damage: throwDamage,
+      damage: THROW.damage,
       hitLevel: 'throw',
       impactX: impact.x,
       impactY: impact.y,
@@ -408,14 +384,13 @@ export class BattleEngine {
   }
 }
 
-function createFighter(id: FighterId, name: string, x: number, maxHealth: number): FighterModel {
+function createFighter(id: FighterId, name: string, x: number): FighterModel {
   return {
     id,
     name,
     x,
     facing: id === 'player' ? 1 : -1,
-    health: maxHealth,
-    maxHealth,
+    health: FIGHTER.maxHealth,
     state: state('idle', 0),
     pendingCommand: undefined,
     commandBufferMs: 0,

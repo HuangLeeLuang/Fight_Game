@@ -8,11 +8,6 @@ export class SimpleAiController {
   private decisionMs = 0;
   private reactionMs = 0;
   private pendingReaction?: FighterIntent;
-  private difficulty = 1;
-
-  setDifficulty(value: number): void {
-    this.difficulty = Math.max(0.6, Math.min(2.2, value));
-  }
 
   update(snapshot: BattleSnapshot, dtMs: number): FighterIntent {
     const ai = snapshot.ai;
@@ -30,12 +25,12 @@ export class SimpleAiController {
 
     if (!this.pendingReaction && player.state.kind === 'attackWindup') {
       this.pendingReaction = { left: false, right: false, block: true };
-      this.reactionMs = randomBetween(AI.reactionDelayMinMs, AI.reactionDelayMaxMs) / this.difficulty;
+      this.reactionMs = randomBetween(AI.reactionDelayMinMs, AI.reactionDelayMaxMs);
     }
 
     if (this.decisionMs <= 0) {
       this.mode = this.chooseMode(distance);
-      this.decisionMs = randomBetween(AI.decisionMinMs, AI.decisionMaxMs) / this.difficulty;
+      this.decisionMs = randomBetween(AI.decisionMinMs, AI.decisionMaxMs);
     }
 
     if (ai.state.kind !== 'idle' && ai.state.kind !== 'blocking') {
@@ -82,12 +77,11 @@ export class SimpleAiController {
   }
 
   private chooseMode(distance: number): AiMode {
-    const mistakeChance = AI.mistakeChance / this.difficulty;
-    if (Math.random() < mistakeChance) return 'mistake';
+    if (Math.random() < AI.mistakeChance) return 'mistake';
     if (distance > AI.preferredRange + 28) return Math.random() < 0.72 ? 'approach' : 'bait';
     const roll = Math.random();
-    if (roll < Math.min(0.72, 0.48 + this.difficulty * 0.06)) return 'pressure';
-    if (roll < 0.76) return 'guard';
+    if (roll < 0.54) return 'pressure';
+    if (roll < 0.74) return 'guard';
     return 'bait';
   }
 }
